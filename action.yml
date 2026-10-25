@@ -1,0 +1,7 @@
+name: Check Markdown links
+description: Find broken links, unstable anchors, stale section references and repeated sentences in a repository's Markdown.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 -I "$GITHUB_ACTION_PATH/check-links.py" "$GITHUB_WORKSPACE"
