@@ -45,7 +45,7 @@ term starts with TERM. It exits 1 when none does. It reads only those two
 glossaries, so one repository's terms never show up in another's lookup.
 
 --vale DIR writes, instead of the checks, Vale's word lists under DIR: the
-Global and Project vocabularies (every glossary term) and the Glossary
+Global and Project vocabularies (every glossary term, in any case) and the Glossary
 substitution rule (wording a row rejects with <!-- reject: a, b -->, replaced
 by the row's first term). The rule sets vocab: false, so no vocabulary entry
 can excuse rejected wording.
@@ -371,10 +371,8 @@ def themes(root, skip=()):
 
 
 def vocabulary_entry(name):
-    """A Vale vocabulary pattern: ordinary words match in any case, names like KairOS or LLM only as written."""
-    pattern = re.escape(name).replace("\\ ", " ")
-    plain = name == name.lower() or name == name[0].upper() + name[1:].lower()
-    return f"(?i){pattern}" if plain else pattern
+    """A Vale vocabulary pattern matching the term in any case: glossaries state spellings, not casing rules."""
+    return "(?i)" + re.escape(name).replace("\\ ", " ")
 
 
 def vale(root, out, skip=(), shared=GLOBAL):

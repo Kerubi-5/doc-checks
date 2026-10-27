@@ -292,8 +292,8 @@ class CheckLinksTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 checker.vale(str(root / "repo"), ".vale/styles", shared=str(shared))
             styles = root / "repo" / ".vale" / "styles"
-            self.assertEqual((styles / "config/vocabularies/Global/accept.txt").read_text(), "(?i)Rollback\nLLM\n")
-            self.assertEqual((styles / "config/vocabularies/Project/accept.txt").read_text(), "(?i)\\.gitignore\nKairOS\n")
+            self.assertEqual((styles / "config/vocabularies/Global/accept.txt").read_text(), "(?i)LLM\n(?i)Rollback\n")
+            self.assertEqual((styles / "config/vocabularies/Project/accept.txt").read_text(), "(?i)KairOS\n(?i)\\.gitignore\n")
             rule = (styles / "Glossary/Substitutions.yml").read_text()
             self.assertIn("vocab: false\n", rule)
             self.assertIn('  "kairos app": "KairOS"\n  "kairos-app": "KairOS"\n', rule)
