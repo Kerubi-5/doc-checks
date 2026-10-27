@@ -46,7 +46,7 @@ class CheckLinksTests(unittest.TestCase):
             write(root, "AGENTS.md", text=sentence)
             (root / "CLAUDE.md").symlink_to("AGENTS.md")
             self.assertEqual(self.found(root), {"AGENTS.md"})
-            self.assertEqual(self.check(root), (0, "1 files checked, 0 findings\n"))
+            self.assertEqual(self.check(root), (0, "1 files checked, 0 findings, 0 warnings\n"))
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_git_ignored_files_are_skipped_inside_a_work_tree(self):
@@ -61,7 +61,7 @@ class CheckLinksTests(unittest.TestCase):
             self.assertEqual(self.found(root / "kept"), {"b.md"})  # a root below the work tree's top
             with tempfile.TemporaryDirectory() as empty:  # no git on PATH: today's plain walk
                 result = self.run_cli(folder, path=empty)
-            self.assertEqual((result.returncode, result.stdout), (0, "5 files checked, 0 findings\n"))
+            self.assertEqual((result.returncode, result.stdout), (0, "5 files checked, 0 findings, 0 warnings\n"))
 
     def test_skip_option_prunes_named_folders_at_any_depth(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -71,7 +71,7 @@ class CheckLinksTests(unittest.TestCase):
             self.assertEqual(self.found(root, ("Sources", "_evidence")),
                              {"keep.md", "Sourcesish/c.md", "notes/Sources.md"})
             result = self.run_cli("--skip", "Sources", "--skip", "_evidence", folder)
-            self.assertEqual((result.returncode, result.stdout), (0, "3 files checked, 0 findings\n"))
+            self.assertEqual((result.returncode, result.stdout), (0, "3 files checked, 0 findings, 0 warnings\n"))
             result = self.run_cli("--themes", "--skip", "Sources", folder)
             self.assertEqual((result.returncode, result.stdout.splitlines()[-1]),
                              (0, "0 paragraphs in 4 files, 0 pairs at or above 0.3"))
@@ -149,7 +149,7 @@ class CheckLinksTests(unittest.TestCase):
                 '(`docs/guide.md`, "Tools") and\n(Core, "Safety\nboundaries"), "Cleanup" below,\n'
                 '[rollback](SAFETY.md#standard-rollback), (`~/Code/kairos/CLAUDE.md`, "Elsewhere").\n'
                 '## Cleanup <a id="cleanup"></a>\n')
-            self.assertEqual(self.check(root), (0, "3 files checked, 0 findings\n"))
+            self.assertEqual(self.check(root), (0, "3 files checked, 0 findings, 0 warnings\n"))
             (root / "README.md").write_text(
                 '(`docs/guide.md`, "Setup"), Core\'s "Change safety", "Profile" above.\n')
             status, output = self.check(root)
@@ -164,7 +164,7 @@ class CheckLinksTests(unittest.TestCase):
             write(root, "docs/archive/old.md", text="## Old title\n")
             write(root, "guide.md", text="## Setup <a id=\"setup\"></a>\n")
             write(root, "README.md", text='(`~/Code/repo/guide.md`, "Setup"), (`~/Code/other/x.md`, "Gone").\n')
-            self.assertEqual(self.check(root), (0, "2 files checked, 0 findings\n"))
+            self.assertEqual(self.check(root), (0, "2 files checked, 0 findings, 0 warnings\n"))
             write(root, "README.md", text='(`~/Code/repo/guide.md`, "Teardown") [old](docs/archive/old.md#old-title)\n')
             status, output = self.check(root)
             self.assertEqual(status, 1)
@@ -217,6 +217,95 @@ class CheckLinksTests(unittest.TestCase):
                 self.assertEqual(checker.define(str(root / "repo"), "deploy", shared=str(shared)), 1)
         result = self.run_cli("--define", "zzz-no-such-term", str(SCRIPT.parent))
         self.assertEqual((result.returncode, result.stdout), (1, 'No glossary defines "zzz-no-such-term".\n'))
+
+    PARAGRAPH = ("Every scheduled report gathers invoices from accounting, reconciles payments against bank "
+                 "statements, flags mismatched totals, emails finance reviewers, archives approved batches, "
+                 "and records audit notes before closing the monthly ledger period.")
+
+    def test_near_duplicates_warn_with_both_locations_without_failing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write(root, "a.md", text="# A\n\n" + self.PARAGRAPH + "\n")
+            write(root, "b.md", text=self.PARAGRAPH.replace("emails finance", "notifies finance") + "\n")
+            write(root, "c.md", text="Unrelated words about gardening, tomatoes, compost, watering, sunlight, "
+                                     "pruning, mulch, seedlings, harvest, trellis, aphids, ladybugs, soil, "
+                                     "worms, rain, shade, frost, seeds, greenhouse.\n")
+            status, output = self.check(root)
+            self.assertEqual(status, 0)
+            self.assertIn("NEAR (warning) a.md:3 ~ b.md:1", output)
+            self.assertTrue(output.endswith("3 files checked, 0 findings, 1 warnings\n"))
+            (root / ".check-links.json").write_text('{"similar_ok": [{"files": ["b.md", "a.md"], "reason": "test"}]}')
+            self.assertNotIn("NEAR", self.check(root)[1])
+            (root / ".check-links.json").write_text('{"similar_ok": [{"files": ["b.md", "a.md"]}]}')
+            with self.assertRaises(SystemExit):
+                self.check(root)
+        self.assertNotEqual(checker.paragraphs("x", "never " + self.PARAGRAPH)[0][2],
+                            checker.paragraphs("x", self.PARAGRAPH)[0][2])  # negation is kept
+
+    def test_generated_copies_only_duplicate_authored_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / ".check-links.json").write_text('{"generated": ["CLAUDE.md", "AGENTS.md"]}')
+            write(root, "CLAUDE.md", "AGENTS.md", text=self.PARAGRAPH + "\n")
+            self.assertEqual(self.check(root), (0, "2 files checked, 0 findings, 0 warnings\n"))
+            write(root, "docs/guide.md", text=self.PARAGRAPH + "\n")
+            status, output = self.check(root)
+            self.assertEqual(status, 1)
+            self.assertIn("DUP AGENTS.md, CLAUDE.md, docs/guide.md:", output)
+
+    def test_glossary_paths_outside_the_repository_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write(root, "client/glossary.md", text='| <a id="x"></a>Secret | Client only. |\n')
+            write(root, "repo/README.md")
+            (root / "repo" / ".check-links.json").write_text('{"glossary": "../client/glossary.md"}')
+            with self.assertRaises(SystemExit):
+                self.check(root / "repo")
+            (root / "repo" / "terms.md").symlink_to(root / "client" / "glossary.md")
+            (root / "repo" / ".check-links.json").write_text('{"glossary": "terms.md"}')
+            with self.assertRaises(SystemExit):
+                self.check(root / "repo")
+
+    def test_links_handed_to_lychee_skip_only_local_link_findings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            shared = root / "global.md"
+            shared.write_text('| <a id="r"></a>Rollback | Undo. |\n')
+            write(root, "repo/a.md", text="## Old title\n")
+            write(root, "repo/README.md", text=(
+                f"[m](missing.md) [x](a.md#nope) [u](a.md#old-title) [g]({checker.GLOBAL_URL}#gone)\n"))
+            (root / "repo" / ".check-links.json").write_text('{"links": "lychee"}')
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                checker.main(str(root / "repo"), shared=str(shared))
+            self.assertEqual(output.getvalue().splitlines()[:-1], [
+                "UNSTABLE README.md: a.md#old-title (heading has no <a id>)",
+                f"LINK README.md: {checker.GLOBAL_URL}#gone (missing anchor)"])
+
+    def test_vale_files_come_from_glossary_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            shared = root / "global.md"
+            shared.write_text('| <a id="llm"></a>LLM | A model. |\n| <a id="r"></a>Rollback | Undo. |\n')
+            write(root, "repo/glossary.md", text=(
+                '| <a id="k"></a>KairOS / .gitignore | An app. <!-- reject: Kairos app, kairos-app --> |\n'))
+            with contextlib.redirect_stdout(io.StringIO()):
+                checker.vale(str(root / "repo"), ".vale/styles", shared=str(shared))
+            styles = root / "repo" / ".vale" / "styles"
+            self.assertEqual((styles / "config/vocabularies/Global/accept.txt").read_text(), "(?i)Rollback\nLLM\n")
+            self.assertEqual((styles / "config/vocabularies/Project/accept.txt").read_text(), "(?i)\\.gitignore\nKairOS\n")
+            rule = (styles / "Glossary/Substitutions.yml").read_text()
+            self.assertIn("vocab: false\n", rule)
+            self.assertIn('  "kairos app": "KairOS"\n  "kairos-app": "KairOS"\n', rule)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                checker.define(str(root / "repo"), "kairos", shared=str(shared))
+            self.assertEqual(output.getvalue(), "KairOS / .gitignore (glossary.md:1): An app.\n")
+            shared.write_text("")
+            write(root, "repo/glossary.md", text='| <a id="k"></a>KairOS | An app. |\n')
+            with contextlib.redirect_stdout(io.StringIO()):
+                checker.vale(str(root / "repo"), ".vale/styles", shared=str(shared))
+            self.assertIn("swap: {}\n", (styles / "Glossary/Substitutions.yml").read_text())
 
 
 if __name__ == "__main__":
