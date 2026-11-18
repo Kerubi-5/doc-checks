@@ -9,8 +9,11 @@ when clean. Reads only.
 files that say the most similar things (shared vocabulary, weighted by how
 rare each word is across the repository), best match first, with both
 locations and the words they share. Run it before writing a new section: if
-the idea already has a home, link there instead. It is a reading aid, not a
-pass or fail, so it always exits 0.
+the idea already has a home, link there instead. Pairs the settings below
+accept (generated or similar_ok) are hidden and counted, and the rest are
+listed up to 25, so known pairs never crowd out ones still to review. A listed
+pair is a reason to read both places, not proof of a duplicate. It is a reading
+aid, not a pass or fail, so it always exits 0.
 
 Live documents are every .md file except hidden and node_modules folders,
 symlinks (so a linked file is not read twice), files Git ignores when the root
@@ -35,8 +38,9 @@ name, as in (Core, "Section"). glossary is the repository's own glossary,
 found at docs/glossary.md or glossary.md when not set; a path outside the
 repository, symlinks included, is refused. generated lists files written by a
 tool from one source: their links are checked, but they never count as
-duplicates of each other. similar_ok silences the NEAR warning for one pair of
-files and needs a reason. links set to "lychee" leaves missing local files and
+duplicates of each other. similar_ok silences the NEAR warning and the
+--themes listing for one pair of files and needs a reason; it never excuses a
+DUP. generated alone never hides a pair of a generated and a written file. links set to "lychee" leaves missing local files and
 anchors to lychee; the checker still reports the rest.
 
 --define TERM prints, instead of the checks, every row in the repository's
@@ -359,14 +363,25 @@ def similar(files, minimum):
     return units, pairs
 
 
+def accepted(fa, fb, root, config):
+    """True when .check-links.json expects this pair to be similar: both generated, or listed in similar_ok."""
+    a, b = os.path.relpath(fa, root), os.path.relpath(fb, root)
+    return (a in config["generated"] and b in config["generated"]) or frozenset((a, b)) in config["similar_ok"]
+
+
 def themes(root, skip=()):
     root = os.path.abspath(root)
-    files = sorted(live_files(root, settings(root, skip)["skip"]))
+    config = settings(root, skip)
+    files = sorted(live_files(root, config["skip"]))
+    # Hidden files still count in the word weights, so hiding a pair never changes another pair's score.
     units, pairs = similar(files, MIN_SCORE)
-    for score, (fa, la, _), (fb, lb, _), shared in pairs[:MAX_PAIRS]:
+    review = [p for p in pairs if not accepted(p[1][0], p[2][0], root, config)]
+    for score, (fa, la, _), (fb, lb, _), shared in review[:MAX_PAIRS]:
         print(f"{score:.2f} {os.path.relpath(fa, root)}:{la} ~ {os.path.relpath(fb, root)}:{lb}"
               f"  [{', '.join(shared)}]")
-    print(f"{len(units)} paragraphs in {len(files)} files, {len(pairs)} pairs at or above {MIN_SCORE}")
+    print(f"{len(units)} paragraphs in {len(files)} files, {len(pairs)} pairs at or above {MIN_SCORE}, "
+          f"{len(pairs) - len(review)} hidden by {CONFIG}, {len(review)} to review, "
+          f"{min(len(review), MAX_PAIRS)} shown")
     return 0
 
 
@@ -457,8 +472,7 @@ def main(root, skip=(), shared=GLOBAL):
     findings = list(dict.fromkeys(findings))  # the same link twice in a file: one line
     warnings = []
     for score, (fa, la, _), (fb, lb, _), shared_words in similar(files, NEAR_SCORE)[1]:
-        pair = frozenset((os.path.relpath(fa, root), os.path.relpath(fb, root)))
-        if (fa in generated and fb in generated) or pair in config["similar_ok"]:
+        if accepted(fa, fb, root, config):
             continue
         warnings.append(f"NEAR (warning) {os.path.relpath(fa, root)}:{la} ~ {os.path.relpath(fb, root)}:{lb}"
                         f" {score:.2f} [{', '.join(shared_words)}]")

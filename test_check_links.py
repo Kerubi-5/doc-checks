@@ -74,7 +74,8 @@ class CheckLinksTests(unittest.TestCase):
             self.assertEqual((result.returncode, result.stdout), (0, "3 files checked, 0 findings, 0 warnings\n"))
             result = self.run_cli("--themes", "--skip", "Sources", folder)
             self.assertEqual((result.returncode, result.stdout.splitlines()[-1]),
-                             (0, "0 paragraphs in 4 files, 0 pairs at or above 0.3"))
+                             (0, "0 paragraphs in 4 files, 0 pairs at or above 0.3, "
+                                 "0 hidden by .check-links.json, 0 to review, 0 shown"))
 
     def test_root_files_and_core_anchors_are_checked_from_relative_root(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -252,6 +253,63 @@ class CheckLinksTests(unittest.TestCase):
             status, output = self.check(root)
             self.assertEqual(status, 1)
             self.assertIn("DUP AGENTS.md, CLAUDE.md, docs/guide.md:", output)
+
+    GARDEN = ("Unrelated words about gardening, tomatoes, compost, watering, sunlight, pruning, mulch, "
+              "seedlings, harvest, trellis, aphids, ladybugs, soil, worms, rain, shade, frost, seeds, greenhouse.")
+
+    def themes_repo(self, root):
+        """Two hidden pairs (generated copies, a similar_ok pair) scoring above two pairs left to review."""
+        (root / ".check-links.json").write_text(
+            '{"generated": ["CLAUDE.md", "AGENTS.md"],'
+            ' "similar_ok": [{"files": ["notes/b.md", "a.md"], "reason": "each is read alone"}]}')
+        write(root, "CLAUDE.md", "AGENTS.md", text=self.PARAGRAPH + "\n")
+        write(root, "a.md", "notes/b.md", text=self.GARDEN + "\n")
+        write(root, "guide.md", text=self.PARAGRAPH.replace("emails finance", "notifies finance") + "\n")
+
+    def themes(self, root):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = checker.themes(str(root))
+        return status, output.getvalue().splitlines()
+
+    def test_themes_hide_pairs_the_settings_accept_before_the_display_cap(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.themes_repo(root)
+            status, lines = self.themes(root)
+            self.assertEqual(status, 0)
+            self.assertEqual([line.split()[1:4] for line in lines[:-1]],
+                             [["AGENTS.md:1", "~", "guide.md:1"], ["CLAUDE.md:1", "~", "guide.md:1"]])
+            self.assertEqual(lines[-1], "5 paragraphs in 5 files, 4 pairs at or above 0.3, "
+                                        "2 hidden by .check-links.json, 2 to review, 2 shown")
+            shown = checker.MAX_PAIRS
+            checker.MAX_PAIRS = 1  # the hidden pairs score higher, so they would fill a cap applied first
+            try:
+                status, lines = self.themes(root)
+            finally:
+                checker.MAX_PAIRS = shown
+            self.assertEqual(len(lines), 2)
+            self.assertIn("guide.md:1", lines[0])
+            self.assertTrue(lines[-1].endswith("2 to review, 1 shown"))
+
+    def test_themes_scores_do_not_change_when_pairs_are_hidden(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.themes_repo(root)
+            hidden = [line for line in self.themes(root)[1] if "guide.md" in line]
+            (root / ".check-links.json").unlink()
+            shown = [line for line in self.themes(root)[1] if "guide.md" in line]
+            self.assertEqual(hidden, shown)
+            self.assertEqual(len(shown), 2)
+
+    def test_similar_ok_never_excuses_an_exact_duplicate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.themes_repo(root)
+            status, output = self.check(root)
+            self.assertEqual(status, 1)
+            self.assertIn("DUP a.md, notes/b.md:", output)
+            self.assertNotIn("NEAR (warning) a.md", output)
 
     def test_glossary_paths_outside_the_repository_are_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
